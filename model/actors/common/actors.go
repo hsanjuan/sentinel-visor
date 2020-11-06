@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-pg/pg/v10"
 	"go.opentelemetry.io/otel/api/global"
@@ -28,6 +29,20 @@ func (a *Actor) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 	return nil
 }
 
+type Actors []*Actor
+
+func (as Actors) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
+	if len(as) == 0 {
+		return nil
+	}
+	if _, err := tx.ModelContext(ctx, &as).
+		OnConflict("do nothing").
+		Insert(); err != nil {
+		return fmt.Errorf("persisting actors: %w", err)
+	}
+	return nil
+}
+
 type ActorState struct {
 	Height int64  `pg:",pk,notnull,use_zero"`
 	Head   string `pg:",pk,notnull"`
@@ -42,6 +57,20 @@ func (s *ActorState) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 		OnConflict("do nothing").
 		Insert(); err != nil {
 		return err
+	}
+	return nil
+}
+
+type ActorStates []*ActorState
+
+func (as ActorStates) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
+	if len(as) == 0 {
+		return nil
+	}
+	if _, err := tx.ModelContext(ctx, &as).
+		OnConflict("do nothing").
+		Insert(); err != nil {
+		return fmt.Errorf("persisting actorStates: %w", err)
 	}
 	return nil
 }

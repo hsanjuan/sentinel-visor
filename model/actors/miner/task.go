@@ -89,3 +89,14 @@ func (ml MinerTaskResultList) PersistWithTx(ctx context.Context, tx *pg.Tx) erro
 	}
 	return nil
 }
+
+type MinerTaskResults struct {
+	MinerInfoModel           MinerInfoList
+	FeeDebtModel             MinerFeeDebtList
+	LockedFundsModel         MinerLockedFundsList
+	CurrentDeadlineInfoModel MinerCurrentDeadlineInfoList
+	PreCommitsModel          MinerPreCommitInfoList
+	SectorsModel             MinerSectorInfoList
+	SectorEventsModel        MinerSectorEventList
+	SectorDealsModel         MinerSectorDealList
+}

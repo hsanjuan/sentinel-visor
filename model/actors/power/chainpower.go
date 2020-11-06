@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-pg/pg/v10"
 	"go.opentelemetry.io/otel/api/global"
+	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/sentinel-visor/metrics"
 )
@@ -45,6 +46,20 @@ func (cp *ChainPower) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 		OnConflict("do nothing").
 		Insert(); err != nil {
 		return fmt.Errorf("persisting chain power: %w", err)
+	}
+	return nil
+}
+
+type ChainPowerList []ChainPower
+
+func (cp ChainPowerList) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
+	if len(cp) == 0 {
+		return nil
+	}
+	if _, err := tx.ModelContext(ctx, &cp).
+		OnConflict("do nothing").
+		Insert(); err != nil {
+		return xerrors.Errorf("persisting miner info list: %w", err)
 	}
 	return nil
 }
