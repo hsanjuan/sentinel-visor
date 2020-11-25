@@ -1,25 +1,21 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"math/big"
 
 	"github.com/filecoin-project/lotus/build"
 	"github.com/filecoin-project/lotus/chain/store"
 	"github.com/filecoin-project/lotus/chain/types"
-	"github.com/filecoin-project/statediff"
-	"github.com/filecoin-project/statediff/codec/fcjson"
 	"github.com/ipfs/go-cid"
-	"github.com/ipld/go-ipld-prime"
 	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/sentinel-visor/lens"
 	"github.com/filecoin-project/sentinel-visor/model/derived"
 	messagemodel "github.com/filecoin-project/sentinel-visor/model/messages"
+	messagetask "github.com/filecoin-project/sentinel-visor/tasks/message"
 )
 
 func runMessages(ctx context.Context, node lens.API, curChain *chain) error {
@@ -162,7 +158,7 @@ func runMessages(ctx context.Context, node lens.API, curChain *chain) error {
 		} else {
 			dstActorCode = dstActor.Code.String()
 		}
-		pm, err := parseMsg(message, curChain.prev, dstActorCode)
+		pm, err := messagetask.ParseMsg(message, curChain.prev, dstActorCode)
 		if err != nil {
 			logger.Error(err)
 			return err
@@ -200,58 +196,4 @@ func runMessages(ctx context.Context, node lens.API, curChain *chain) error {
 	}
 	curChain.dbOps = append(curChain.dbOps, messagesModel, parsedMessagesModel, gasOutputsModel)
 	return nil
-}
-
-func parseMsg(m *types.Message, ts *types.TipSet, destCode string) (*messagemodel.ParsedMessage, error) {
-	pm := &messagemodel.ParsedMessage{
-		Cid:    m.Cid().String(),
-		Height: int64(ts.Height()),
-		From:   m.From.String(),
-		To:     m.To.String(),
-		Value:  m.Value.String(),
-	}
-
-	actor, ok := statediff.LotusActorCodes[destCode]
-	if !ok {
-		actor = statediff.LotusTypeUnknown
-	}
-	var params ipld.Node
-	var name string
-	var err error
-
-	// TODO: the following closure is in place to handle the potential for panic
-	// in ipld-prime. Can be removed once fixed upstream.
-	// tracking issue: https://github.com/ipld/go-ipld-prime/issues/97
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				err = xerrors.Errorf("recovered panic: %v", r)
-			}
-		}()
-		params, name, err = statediff.ParseParams(m.Params, int(m.Method), actor)
-	}()
-	if err != nil && actor != statediff.LotusTypeUnknown {
-		// fall back to generic cbor->json conversion.
-		actor = statediff.LotusTypeUnknown
-		params, name, err = statediff.ParseParams(m.Params, int(m.Method), actor)
-	}
-	if name == "Unknown" {
-		name = fmt.Sprintf("%s.%d", actor, m.Method)
-	}
-	pm.Method = name
-	if err != nil {
-		log.Warnf("failed to parse parameters of message %s: %v", m.Cid, err)
-		// this can occur when the message is not valid cbor
-		pm.Params = ""
-		return pm, nil
-	}
-	if params != nil {
-		buf := bytes.NewBuffer(nil)
-		if err := fcjson.Encoder(params, buf); err != nil {
-			return nil, xerrors.Errorf("json encode: %w", err)
-		}
-		pm.Params = string(bytes.ToValidUTF8(buf.Bytes(), []byte{}))
-	}
-
-	return pm, nil
 }

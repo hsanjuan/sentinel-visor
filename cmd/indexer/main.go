@@ -92,19 +92,19 @@ func main() {
 			}
 
 			defer func() {
-				rctx.closer()
-				if err := rctx.db.Close(ctx); err != nil {
+				rctx.Closer()
+				if err := rctx.DB.Close(ctx); err != nil {
 					log.Errorw("close database", "error", err)
 				}
 			}()
 
-			node, nodeCloser, err := rctx.opener.Open(ctx)
+			node, nodeCloser, err := rctx.Opener.Open(ctx)
 			if err != nil {
 				return xerrors.Errorf("open api: %w", err)
 			}
 			defer nodeCloser()
 
-			return run(ctx, rctx.db, node, heightFrom, heightTo)
+			return run(ctx, rctx.DB, node, heightFrom, heightTo)
 		},
 	}
 
