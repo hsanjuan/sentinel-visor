@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-pg/pg/v10"
 	"go.opentelemetry.io/otel/api/global"
+	"go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/label"
 )
 
 type Actor struct {
@@ -29,13 +31,18 @@ func (a *Actor) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 	return nil
 }
 
-type Actors []*Actor
+// ActorList is a slice of Actors persistable in a single batch.
+type ActorList []*Actor
 
-func (as Actors) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
-	if len(as) == 0 {
+// Persist
+func (actors ActorList) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
+	ctx, span := global.Tracer("").Start(ctx, "ActorList.PersistWithTx", trace.WithAttributes(label.Int("count", len(actors))))
+	defer span.End()
+
+	if len(actors) == 0 {
 		return nil
 	}
-	if _, err := tx.ModelContext(ctx, &as).
+	if _, err := tx.ModelContext(ctx, &actors).
 		OnConflict("do nothing").
 		Insert(); err != nil {
 		return fmt.Errorf("persisting actors: %w", err)
@@ -50,6 +57,7 @@ type ActorState struct {
 	State  string `pg:",type:jsonb,notnull"`
 }
 
+// PersistWithTx inserts the batch using the given transaction.
 func (s *ActorState) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 	ctx, span := global.Tracer("").Start(ctx, "ActorState.PersistWithTx")
 	defer span.End()
@@ -61,13 +69,18 @@ func (s *ActorState) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 	return nil
 }
 
-type ActorStates []*ActorState
+// ActorStateList is a list of ActorStates persistable in a single batch.
+type ActorStateList []*ActorState
 
-func (as ActorStates) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
-	if len(as) == 0 {
+// PersistWithTx inserts the batch using the given transaction.
+func (states ActorStateList) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
+	ctx, span := global.Tracer("").Start(ctx, "ActorStateList.PersistWithTx", trace.WithAttributes(label.Int("count", len(states))))
+	defer span.End()
+
+	if len(states) == 0 {
 		return nil
 	}
-	if _, err := tx.ModelContext(ctx, &as).
+	if _, err := tx.ModelContext(ctx, &states).
 		OnConflict("do nothing").
 		Insert(); err != nil {
 		return fmt.Errorf("persisting actorStates: %w", err)

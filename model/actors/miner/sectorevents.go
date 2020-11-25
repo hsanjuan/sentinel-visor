@@ -46,6 +46,7 @@ func (l MinerSectorEventList) PersistWithTx(ctx context.Context, tx *pg.Tx) erro
 	if len(l) == 0 {
 		return nil
 	}
+
 	if _, err := tx.ModelContext(ctx, &l).
 		OnConflict("do nothing").
 		Insert(); err != nil {
