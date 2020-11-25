@@ -22,8 +22,8 @@ func runActors(ctx context.Context, node lens.API, curChain *chain, batchCh chan
 		logger.Error(err)
 		return err
 	}
-	actorDBs := make(commonmodel.Actors, 0, 1000)
-	stateDBs := make(commonmodel.ActorStates, 0, 1000)
+	actorDBs := make(commonmodel.ActorList, 0, 1000)
+	stateDBs := make(commonmodel.ActorStateList, 0, 1000)
 	minerTaskResults := &MinerTaskResults{
 		MinerInfoModel:           make(minermodel.MinerInfoList, 0, 1000),
 		FeeDebtModel:             make(minermodel.MinerFeeDebtList, 0, 1000),

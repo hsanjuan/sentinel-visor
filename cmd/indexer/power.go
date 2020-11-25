@@ -53,7 +53,7 @@ func extractPower(ctx context.Context, node lens.API, chain *chain, actor *types
 	if err != nil {
 		return err
 	}
-	results.ChainPowerModel = append(results.ChainPowerModel, *chainPowerModel)
+	results.ChainPowerModel = append(results.ChainPowerModel, chainPowerModel)
 	results.ClaimStateModel = append(results.ClaimStateModel, claimedPowerModel...)
 	return nil
 }

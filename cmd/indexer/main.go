@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/signal"
 	"sync"
@@ -11,6 +10,7 @@ import (
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/lotus/chain/state"
 	"github.com/filecoin-project/lotus/chain/types"
+	"github.com/filecoin-project/sentinel-visor/commands"
 	"github.com/filecoin-project/sentinel-visor/lens"
 	"github.com/filecoin-project/sentinel-visor/model"
 	"github.com/filecoin-project/sentinel-visor/storage"
@@ -19,10 +19,6 @@ import (
 	"github.com/urfave/cli/v2"
 	"golang.org/x/xerrors"
 
-	carapi "github.com/filecoin-project/sentinel-visor/lens/carrepo"
-	vapi "github.com/filecoin-project/sentinel-visor/lens/lotus"
-	repoapi "github.com/filecoin-project/sentinel-visor/lens/lotusrepo"
-	sqlapi "github.com/filecoin-project/sentinel-visor/lens/sqlrepo"
 	logging "github.com/ipfs/go-log/v2"
 )
 
@@ -90,7 +86,7 @@ func main() {
 			heightFrom := cctx.Int64("from")
 			heightTo := cctx.Int64("to")
 
-			ctx, rctx, err := setupStorageAndAPI(cctx)
+			ctx, rctx, err := commands.SetupStorageAndAPI(cctx)
 			if err != nil {
 				return xerrors.Errorf("setup storage and api: %w", err)
 			}
@@ -115,74 +111,6 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
-}
-
-type RunContext struct {
-	opener lens.APIOpener
-	closer lens.APICloser
-	db     *storage.Database
-}
-
-func setupStorageAndAPI(cctx *cli.Context) (context.Context, *RunContext, error) {
-	var opener lens.APIOpener // the api opener that is used by tasks
-	var closer lens.APICloser // a closer that cleans up the opener when exiting the application
-	var err error
-
-	ctx := cctx.Context
-
-	if cctx.String("lens") == "lotus" {
-		opener, closer, err = vapi.NewAPIOpener(cctx, 10_000)
-	} else if cctx.String("lens") == "lotusrepo" {
-		opener, closer, err = repoapi.NewAPIOpener(cctx)
-	} else if cctx.String("lens") == "carrepo" {
-		opener, closer, err = carapi.NewAPIOpener(cctx)
-	} else if cctx.String("lens") == "sql" {
-		opener, closer, err = sqlapi.NewAPIOpener(cctx)
-	}
-	if err != nil {
-		return nil, nil, xerrors.Errorf("get node api: %w", err)
-	}
-
-	db, err := storage.NewDatabase(ctx, cctx.String("db"), cctx.Int("db-pool-size"))
-	if err != nil {
-		closer()
-		return nil, nil, xerrors.Errorf("new database: %w", err)
-	}
-
-	if err := db.Connect(ctx); err != nil {
-		if !errors.Is(err, storage.ErrSchemaTooOld) || !cctx.Bool("allow-schema-migration") {
-			return nil, nil, xerrors.Errorf("connect database: %w", err)
-		}
-
-		log.Infof("connect database: %v", err.Error())
-
-		// Schema is out of data and we're allowed to do schema migrations
-		log.Info("Migrating schema to latest version")
-		err := db.MigrateSchema(ctx)
-		if err != nil {
-			closer()
-			return nil, nil, xerrors.Errorf("migrate schema: %w", err)
-		}
-
-		// Try to connect again
-		if err := db.Connect(ctx); err != nil {
-			closer()
-			return nil, nil, xerrors.Errorf("connect database: %w", err)
-		}
-	}
-
-	// Make sure the schema is a compatible with what this version of Visor requires
-	if err := db.VerifyCurrentSchema(ctx); err != nil {
-		closer()
-		db.Close(ctx)
-		return nil, nil, xerrors.Errorf("verify schema: %w", err)
-	}
-
-	return ctx, &RunContext{
-		opener: opener,
-		closer: closer,
-		db:     db,
-	}, nil
 }
 
 type chain struct {
