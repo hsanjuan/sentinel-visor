@@ -22,7 +22,7 @@ func init() {
 
 type MultiSigActorExtractor struct{}
 
-func (m MultiSigActorExtractor) Extract(ctx context.Context, a ActorInfo, node ActorStateAPI) (model.Persistable, error) {
+func (m MultiSigActorExtractor) Extract(ctx context.Context, a ActorInfo, node ActorStateAPI) (model.PersistableWithTx, error) {
 	ctx, span := global.Tracer("").Start(ctx, "MultiSigActor")
 	defer span.End()
 
@@ -139,7 +139,7 @@ func NewMultiSigExtractionContext(ctx context.Context, a ActorInfo, node ActorSt
 	if a.Epoch != 0 {
 		prevActor, err := node.StateGetActor(ctx, a.Address, a.ParentTipSet)
 		if err != nil {
-			return nil, xerrors.Errorf("loading previous multisig %s at tipset %s epoch %d: %w", a.Address, a.ParentTipSet, a.Epoch)
+			return nil, xerrors.Errorf("loading previous multisig %s at tipset %s epoch %d: %w", a.Address, a.ParentTipSet, a.Epoch, err)
 		}
 
 		prevState, err = multisig.Load(node.Store(), prevActor)

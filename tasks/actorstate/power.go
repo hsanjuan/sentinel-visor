@@ -47,7 +47,7 @@ func NewPowerStateExtractionContext(ctx context.Context, a ActorInfo, node Actor
 	if a.Epoch != 0 {
 		prevActor, err := node.StateGetActor(ctx, a.Address, a.ParentTipSet)
 		if err != nil {
-			return nil, xerrors.Errorf("loading previous power actor at tipset %s epoch %d: %w", a.ParentTipSet, a.Epoch)
+			return nil, xerrors.Errorf("loading previous power actor at tipset %s epoch %d: %w", a.ParentTipSet, a.Epoch, err)
 		}
 
 		prevState, err = power.Load(node.Store(), prevActor)
@@ -72,7 +72,7 @@ func (p *PowerStateExtractionContext) IsGenesis() bool {
 	return 0 == p.CurrTs.Height()
 }
 
-func (StoragePowerExtractor) Extract(ctx context.Context, a ActorInfo, node ActorStateAPI) (model.Persistable, error) {
+func (StoragePowerExtractor) Extract(ctx context.Context, a ActorInfo, node ActorStateAPI) (model.PersistableWithTx, error) {
 	ctx, span := global.Tracer("").Start(ctx, "StoragePowerExtractor")
 	defer span.End()
 
