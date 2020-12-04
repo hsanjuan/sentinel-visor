@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/api/global"
 	"go.opentelemetry.io/otel/api/trace"
 	"go.opentelemetry.io/otel/label"
+	"golang.org/x/xerrors"
 )
 
 type MarketDealProposal struct {
@@ -45,10 +46,14 @@ type MarketDealProposals []*MarketDealProposal
 func (dps MarketDealProposals) PersistWithTx(ctx context.Context, tx *pg.Tx) error {
 	ctx, span := global.Tracer("").Start(ctx, "MarketDealProposals.PersistWithTx", trace.WithAttributes(label.Int("count", len(dps))))
 	defer span.End()
-	for _, dp := range dps {
-		if err := dp.PersistWithTx(ctx, tx); err != nil {
-			return err
-		}
+
+	if len(dps) == 0 {
+		return nil
+	}
+	if _, err := tx.ModelContext(ctx, &dps).
+		OnConflict("do nothing").
+		Insert(); err != nil {
+		return xerrors.Errorf("persisting chain power list: %w", err)
 	}
 	return nil
 }
