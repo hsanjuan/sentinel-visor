@@ -108,6 +108,10 @@ func runActors(ctx context.Context, node lens.API, curChain *chain, batchCh chan
 		case sa0builtin.StorageMarketActorCodeID,
 			sa2builtin.StorageMarketActorCodeID:
 			err = extractMarket(ctx, node, curChain, &actor, info, marketTaskResults)
+			if err != nil {
+				logger.Error(err)
+				return err
+			}
 		default:
 			// Unsupported actor
 		}
