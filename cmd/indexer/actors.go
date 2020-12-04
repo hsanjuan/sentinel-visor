@@ -8,6 +8,7 @@ import (
 	"github.com/filecoin-project/sentinel-visor/lens"
 	"github.com/filecoin-project/sentinel-visor/model"
 	commonmodel "github.com/filecoin-project/sentinel-visor/model/actors/common"
+	"github.com/filecoin-project/sentinel-visor/model/actors/market"
 	minermodel "github.com/filecoin-project/sentinel-visor/model/actors/miner"
 	"github.com/filecoin-project/sentinel-visor/model/actors/power"
 	"github.com/filecoin-project/sentinel-visor/tasks/actorstate"
@@ -38,6 +39,11 @@ func runActors(ctx context.Context, node lens.API, curChain *chain, batchCh chan
 	powerTaskResults := &PowerTaskResults{
 		ChainPowerModel: make(power.ChainPowerList, 0, 100),
 		ClaimStateModel: make(power.PowerActorClaimList, 0, 100),
+	}
+
+	marketTaskResults := &market.MarketTaskResult{
+		Proposals: make(market.MarketDealProposals, 0, 100),
+		States:    make(market.MarketDealStates, 0, 100),
 	}
 
 	for addrStr, actor := range diff {
@@ -99,6 +105,9 @@ func runActors(ctx context.Context, node lens.API, curChain *chain, batchCh chan
 				logger.Error(err)
 				return err
 			}
+		case sa0builtin.StorageMarketActorCodeID,
+			sa2builtin.StorageMarketActorCodeID:
+			err = extractMarket(ctx, node, curChain, &actor, info, marketTaskResults)
 		default:
 			// Unsupported actor
 		}
@@ -118,6 +127,8 @@ func runActors(ctx context.Context, node lens.API, curChain *chain, batchCh chan
 		minerTaskResults.MinerInfoModel,
 		powerTaskResults.ChainPowerModel,
 		powerTaskResults.ClaimStateModel,
+		marketTaskResults.Proposals,
+		marketTaskResults.States,
 	)
 
 	// TODO: parsed actors
