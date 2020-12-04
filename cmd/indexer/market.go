@@ -11,10 +11,15 @@ import (
 	"github.com/filecoin-project/sentinel-visor/tasks/actorstate"
 )
 
+var pred *state.StatePredicates
+
 func extractMarket(ctx context.Context, node lens.API, chain *chain, actor *types.Actor, info actorstate.ActorInfo, results *market.MarketTaskResult) error {
+	if pred == nil {
+		pred = state.NewStatePredicates(node)
+	}
+
 	m := actorstate.StorageMarketExtractor{}
 
-	pred := state.NewStatePredicates(node)
 	marketPred := actorstate.StorageMarketChangesPred(pred)
 
 	curState, err := lotusmarket.Load(node.Store(), actor)

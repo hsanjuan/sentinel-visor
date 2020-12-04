@@ -42,8 +42,8 @@ func runActors(ctx context.Context, node lens.API, curChain *chain, batchCh chan
 	}
 
 	marketTaskResults := &market.MarketTaskResult{
-		Proposals: make(market.MarketDealProposals, 0, 100),
-		States:    make(market.MarketDealStates, 0, 100),
+		Proposals: make(market.MarketDealProposals, 0, 500),
+		States:    make(market.MarketDealStates, 0, 500),
 	}
 
 	for addrStr, actor := range diff {
