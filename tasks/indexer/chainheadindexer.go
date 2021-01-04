@@ -14,6 +14,7 @@ import (
 
 	"github.com/filecoin-project/sentinel-visor/lens"
 	"github.com/filecoin-project/sentinel-visor/metrics"
+	"github.com/filecoin-project/sentinel-visor/model"
 	"github.com/filecoin-project/sentinel-visor/storage"
 )
 
@@ -91,7 +92,9 @@ func (c *ChainHeadIndexer) index(ctx context.Context, headEvents []*lotus_api.He
 
 			// If we have a zero confidence window then we need to notify every tipset we see
 			if c.confidence == 0 {
-				c.obs.TipSet(ctx, ch.Val)
+				if err := c.obs.TipSet(ctx, ch.Val); err != nil {
+					return xerrors.Errorf("notify tipset: %w", err)
+				}
 			}
 		case store.HCApply:
 			log.Debugw("add tipset", "height", ch.Val.Height(), "tipset", ch.Val.Key().String())
@@ -102,7 +105,9 @@ func (c *ChainHeadIndexer) index(ctx context.Context, headEvents []*lotus_api.He
 
 			// Send the tipset that fell out of the confidence window to the observer
 			if tail != nil {
-				c.obs.TipSet(ctx, tail)
+				if err := c.obs.TipSet(ctx, tail); err != nil {
+					return xerrors.Errorf("notify tipset: %w", err)
+				}
 			}
 
 		case store.HCRevert:
@@ -124,7 +129,7 @@ var _ TipSetObserver = (*TipSetBlockIndexer)(nil)
 // A TipSetBlockIndexer waits for tipsets and persists their block data into a database.
 type TipSetBlockIndexer struct {
 	data    *UnindexedBlockData
-	storage *storage.Database
+	storage model.Storage
 }
 
 func NewTipSetBlockIndexer(d *storage.Database) *TipSetBlockIndexer {
@@ -139,7 +144,7 @@ func (t *TipSetBlockIndexer) TipSet(ctx context.Context, ts *types.TipSet) error
 	if t.data.Size() > 0 {
 		// persist the blocks to storage
 		log.Debugw("persisting batch", "count", t.data.Size(), "height", t.data.Height())
-		if err := t.data.Persist(ctx, t.storage.DB); err != nil {
+		if err := t.storage.PersistBatch(ctx, t.data); err != nil {
 			return xerrors.Errorf("persist: %w", err)
 		}
 	}

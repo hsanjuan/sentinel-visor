@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+	"github.com/filecoin-project/sentinel-visor/model/actors/miner"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,19 +120,18 @@ func TestLeaseStateChanges(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedTipsets.PersistWithTx(ctx, tx)
-	}); err != nil {
+	d := &Database{
+		DB:    db,
+		Clock: testutil.NewMockClock(),
+	}
+
+	if err := d.PersistBatch(ctx, indexedTipsets); err != nil {
 		t.Fatalf("persisting indexed blocks: %v", err)
 	}
 
 	const batchSize = 3
 
 	claimUntil := testutil.KnownTime.Add(time.Minute * 10)
-	d := &Database{
-		DB:    db,
-		Clock: testutil.NewMockClock(),
-	}
 
 	claimed, err := d.LeaseStateChanges(ctx, claimUntil, batchSize, 0, 500)
 	require.NoError(t, err)
@@ -249,9 +250,11 @@ func TestLeaseActors(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedActors.PersistWithTx(ctx, tx)
-	}); err != nil {
+	d := &Database{
+		DB:    db,
+		Clock: testutil.NewMockClock(),
+	}
+	if err := d.PersistBatch(ctx, indexedActors); err != nil {
 		t.Fatalf("persisting indexed actors: %v", err)
 	}
 
@@ -260,10 +263,6 @@ func TestLeaseActors(t *testing.T) {
 
 	claimUntil := testutil.KnownTime.Add(time.Minute * 10)
 
-	d := &Database{
-		DB:    db,
-		Clock: testutil.NewMockClock(),
-	}
 	claimed, err := d.LeaseActors(ctx, claimUntil, batchSize, 0, 500, allowedCodes)
 	require.NoError(t, err)
 	require.Equal(t, batchSize, len(claimed), "number of claimed actors")
@@ -316,15 +315,13 @@ func TestMarkActorComplete(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedActors.PersistWithTx(ctx, tx)
-	}); err != nil {
-		t.Fatalf("persisting indexed actors: %v", err)
-	}
-
 	d := &Database{
 		DB:    db,
 		Clock: testutil.NewMockClock(),
+	}
+
+	if err := d.PersistBatch(ctx, indexedActors); err != nil {
+		t.Fatalf("persisting indexed actors: %v", err)
 	}
 
 	t.Run("with error message", func(t *testing.T) {
@@ -421,19 +418,18 @@ func TestLeaseTipSetMessages(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedMessageTipSets.PersistWithTx(ctx, tx)
-	}); err != nil {
+	d := &Database{
+		DB:    db,
+		Clock: testutil.NewMockClock(),
+	}
+
+	if err := d.PersistBatch(ctx, indexedMessageTipSets); err != nil {
 		t.Fatalf("persisting indexed blocks: %v", err)
 	}
 
 	const batchSize = 3
 
 	claimUntil := testutil.KnownTime.Add(time.Minute * 10)
-	d := &Database{
-		DB:    db,
-		Clock: testutil.NewMockClock(),
-	}
 
 	claimed, err := d.LeaseTipSetMessages(ctx, claimUntil, batchSize, 0, 500)
 	require.NoError(t, err)
@@ -620,34 +616,18 @@ func TestLeaseGasOutputsMessages(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		if err := indexedMessages.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("indexedMessages: %w", err)
-		}
-		if err := receipts.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("receipts: %w", err)
-		}
-		if err := msgs.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("msgs: %w", err)
-		}
-		if err := blockHeaders.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("blockHeaders: %w", err)
-		}
-		if err := blockMessages.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("blockMessages: %w", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("persisting indexed messages: %v", err)
+	d := &Database{
+		DB:    db,
+		Clock: testutil.NewMockClock(),
+	}
+
+	if err := d.PersistBatch(ctx, indexedMessages, receipts, msgs, blockHeaders, blockMessages); err != nil {
+		t.Fatalf("persisting data: %v", err)
 	}
 
 	const batchSize = 3
 
 	claimUntil := testutil.KnownTime.Add(time.Minute * 10)
-	d := &Database{
-		DB:    db,
-		Clock: testutil.NewMockClock(),
-	}
 
 	claimed, err := d.LeaseGasOutputsMessages(ctx, claimUntil, batchSize, 0, 500)
 	require.NoError(t, err)
@@ -834,33 +814,16 @@ func TestFindGasOutputsMessages(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		if err := indexedMessages.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("indexedMessages: %w", err)
-		}
-		if err := receipts.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("receipts: %w", err)
-		}
-		if err := msgs.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("msgs: %w", err)
-		}
-		if err := blockHeaders.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("blockHeaders: %w", err)
-		}
-		if err := blockMessages.PersistWithTx(ctx, tx); err != nil {
-			return fmt.Errorf("blockMessages: %w", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("persisting indexed messages: %v", err)
-	}
-
-	const batchSize = 3
-
 	d := &Database{
 		DB:    db,
 		Clock: testutil.NewMockClock(),
 	}
+
+	if err := d.PersistBatch(ctx, indexedMessages, receipts, msgs, blockHeaders, blockMessages); err != nil {
+		t.Fatalf("persisting data: %v", err)
+	}
+
+	const batchSize = 3
 
 	found, err := d.FindGasOutputsMessages(ctx, batchSize, 0, 500)
 	require.NoError(t, err)
@@ -907,15 +870,13 @@ func TestMarkGasOutputsMessagesComplete(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedMessages.PersistWithTx(ctx, tx)
-	}); err != nil {
-		t.Fatalf("persisting indexed message blocks: %v", err)
-	}
-
 	d := &Database{
 		DB:    db,
 		Clock: testutil.NewMockClock(),
+	}
+
+	if err := d.PersistBatch(ctx, indexedMessages); err != nil {
+		t.Fatalf("persisting indexed message blocks: %v", err)
 	}
 
 	t.Run("with error message", func(t *testing.T) {
@@ -1012,19 +973,17 @@ func TestLeaseTipSetEconomics(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedMessageTipSets.PersistWithTx(ctx, tx)
-	}); err != nil {
+	d := &Database{
+		DB:    db,
+		Clock: testutil.NewMockClock(),
+	}
+	if err := d.PersistBatch(ctx, indexedMessageTipSets); err != nil {
 		t.Fatalf("persisting indexed blocks: %v", err)
 	}
 
 	const batchSize = 3
 
 	claimUntil := testutil.KnownTime.Add(time.Minute * 10)
-	d := &Database{
-		DB:    db,
-		Clock: testutil.NewMockClock(),
-	}
 
 	claimed, err := d.LeaseTipSetEconomics(ctx, claimUntil, batchSize, 0, 500)
 	require.NoError(t, err)
@@ -1076,15 +1035,13 @@ func TestMarkTipSetComplete(t *testing.T) {
 		},
 	}
 
-	if err := db.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return indexedMessages.PersistWithTx(ctx, tx)
-	}); err != nil {
-		t.Fatalf("persisting indexed message blocks: %v", err)
-	}
-
 	d := &Database{
 		DB:    db,
 		Clock: testutil.NewMockClock(),
+	}
+
+	if err := d.PersistBatch(ctx, indexedMessages); err != nil {
+		t.Fatalf("persisting indexed message blocks: %v", err)
 	}
 
 	t.Run("statechange with error", func(t *testing.T) {
@@ -1158,4 +1115,128 @@ func TestMarkTipSetComplete(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
 	})
+}
+
+func TestModelUpsert(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short testing requested")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	db, cleanup, err := testutil.WaitForExclusiveDatabase(ctx, t)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cleanup()) }()
+
+	_, err = db.Exec(`TRUNCATE TABLE miner_infos`)
+	require.NoError(t, err, "truncating miner_infos")
+
+	// database disallowing upserting
+	d := &Database{
+		DB:     db,
+		Clock:  testutil.NewMockClock(),
+		Upsert: false,
+	}
+
+	// model was picked for this test since it has nullable fields and untagged pg fields.
+	minerInfo := &miner.MinerInfo{
+		Height:                  1,
+		MinerID:                 "minerID",
+		StateRoot:               "stateroot",
+		OwnerID:                 "owner",
+		WorkerID:                "worker",
+		WorkerChangeEpoch:       0,
+		ConsensusFaultedElapsed: 0,
+		PeerID:                  "",
+		ControlAddresses:        nil,
+		MultiAddresses:          nil,
+	}
+
+	// the second insert should be ignored.
+	err = d.PersistBatch(ctx, minerInfo)
+	require.NoErrorf(t, err, "persisting miner info model: %v", err)
+	err = d.PersistBatch(ctx, minerInfo)
+	require.NoErrorf(t, err, "persisting miner info model: %v", err)
+
+	var count int
+	_, err = db.QueryOne(pg.Scan(&count), `SELECT COUNT(*) FROM miner_infos`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	count = 0
+	// modify the database to permit upserting
+	d.Upsert = true
+
+	// modify the model, expect this change to persist after the upsert.
+	minerInfo.OwnerID = "UPSERT"
+	err = d.PersistBatch(ctx, minerInfo)
+	require.NoErrorf(t, err, "persisting miner_info model: %v", err)
+
+	// reset count, there should still be a single item in the table
+	_, err = db.QueryOne(pg.Scan(&count), `SELECT COUNT(*) FROM miner_infos`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	var owner string
+	_, err = db.QueryOne(pg.Scan(&owner), `SELECT owner_id FROM miner_infos`)
+	require.NoError(t, err)
+	assert.Equal(t, "UPSERT", owner)
+
+}
+
+func TestLongNames(t *testing.T) {
+	justLongEnough := strings.Repeat("x", MaxPostgresNameLength)
+	_, err := NewDatabase(context.Background(), "postgres://example.com/fakedb", 1, justLongEnough, false)
+	require.NoError(t, err)
+
+	tooLong := strings.Repeat("x", MaxPostgresNameLength+1)
+	_, err = NewDatabase(context.Background(), "postgres://example.com/fakedb", 1, tooLong, false)
+	require.Error(t, err)
+}
+
+// TestingUpsertStruct is only used for validating the GenerateUpsertStrings() method
+type TestingUpsertStruct struct {
+	// should be ignored by upsert generator
+	tableName struct{} `pg:"testing_upsert_struct"` // nolint: structcheck,unused
+	Ignored   string   `pg:"-"`
+
+	// should be a constrained field in the conflict statement
+	Height    int64  `pg:",pk,use_zero,notnull"`
+	Cid       string `pg:",pk,notnull"`
+	StateRoot string `pg:",pk,notnull"`
+
+	// should be an unconstrained field in the upsert statement
+	Heads     string `pg:",notnull"`
+	Shoulders string `pg:",nopk"`
+	Knees     uint64 `pg:",use_zero"`
+
+	// currently we drop the `pg` tag from fields we allow as null, this is probably a bad habit.
+	Toes      []byte
+	CamelCase string
+}
+
+func (t *TestingUpsertStruct) ExpectedConflictStatement() string {
+	return "(cid, height, state_root) DO UPDATE"
+}
+
+func (t *TestingUpsertStruct) ExpectedUpsertStatement() string {
+	return `"camel_case" = EXCLUDED.camel_case, "heads" = EXCLUDED.heads, "knees" = EXCLUDED.knees, "shoulders" = EXCLUDED.shoulders, "toes" = EXCLUDED.toes`
+}
+
+func TestUpsertSQLGeneration(t *testing.T) {
+	testModel := &TestingUpsertStruct{
+		Ignored:   "ignored",
+		Height:    1,
+		Cid:       "cid",
+		StateRoot: "stateroot",
+		Heads:     "heads",
+		Shoulders: "shoulders",
+		Knees:     1,
+		Toes:      []byte{1, 2, 3},
+	}
+	conflict, upsert := GenerateUpsertStrings(testModel)
+
+	assert.Equal(t, testModel.ExpectedConflictStatement(), conflict)
+	assert.Equal(t, testModel.ExpectedUpsertStatement(), upsert)
 }

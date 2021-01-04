@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,9 +85,16 @@ var (
 var (
 	ErrSchemaTooOld = errors.New("database schema is too old and requires migration")
 	ErrSchemaTooNew = errors.New("database schema is too new for this version of visor")
+	ErrNameTooLong  = errors.New("name exceeds maximum length for postgres application names")
 )
 
-func NewDatabase(ctx context.Context, url string, poolSize int, name string) (*Database, error) {
+const MaxPostgresNameLength = 64
+
+func NewDatabase(ctx context.Context, url string, poolSize int, name string, upsert bool) (*Database, error) {
+	if len(name) > MaxPostgresNameLength {
+		return nil, ErrNameTooLong
+	}
+
 	opt, err := pg.ParseURL(url)
 	if err != nil {
 		return nil, xerrors.Errorf("parse database URL: %w", err)
@@ -96,15 +105,17 @@ func NewDatabase(ctx context.Context, url string, poolSize int, name string) (*D
 	}
 
 	return &Database{
-		opt:   opt,
-		Clock: clock.New(),
+		opt:    opt,
+		Clock:  clock.New(),
+		Upsert: upsert,
 	}, nil
 }
 
 type Database struct {
-	DB    *pg.DB
-	opt   *pg.Options
-	Clock clock.Clock
+	DB     *pg.DB
+	opt    *pg.Options
+	Clock  clock.Clock
+	Upsert bool
 }
 
 // Connect opens a connection to the database and checks that the schema is compatible the the version required
@@ -540,10 +551,10 @@ func useNullIfEmpty(s string) *string {
 }
 
 // LeaseGasOutputsMessages leases a set of messages that have receipts for gas output processing. minHeight and maxHeight define an inclusive range of heights to process.
-func (d *Database) LeaseGasOutputsMessages(ctx context.Context, claimUntil time.Time, batchSize int, minHeight, maxHeight int64) ([]*derived.ProcessingGasOutputs, error) {
+func (d *Database) LeaseGasOutputsMessages(ctx context.Context, claimUntil time.Time, batchSize int, minHeight, maxHeight int64) ([]*derived.GasOutputs, error) {
 	stop := metrics.Timer(ctx, metrics.BatchSelectionDuration)
 	defer stop()
-	var list []*derived.ProcessingGasOutputs
+	var list []*derived.GasOutputs
 
 	if err := d.DB.RunInTransaction(ctx, func(tx *pg.Tx) error {
 		_, err := tx.QueryContext(ctx, &list, `
@@ -583,11 +594,11 @@ SELECT * FROM leased;
 }
 
 // FindGasOutputsMessages finds a set of messages that have receipts for gas output processing but does not take a lease out. minHeight and maxHeight define an inclusive range of heights to process.
-func (d *Database) FindGasOutputsMessages(ctx context.Context, batchSize int, minHeight, maxHeight int64) ([]*derived.ProcessingGasOutputs, error) {
+func (d *Database) FindGasOutputsMessages(ctx context.Context, batchSize int, minHeight, maxHeight int64) ([]*derived.GasOutputs, error) {
 	stop := metrics.Timer(ctx, metrics.BatchSelectionDuration)
 	defer stop()
 
-	var list []*derived.ProcessingGasOutputs
+	var list []*derived.GasOutputs
 
 	if err := d.DB.RunInTransaction(ctx, func(tx *pg.Tx) error {
 		_, err := tx.QueryContext(ctx, &list, `
@@ -699,11 +710,129 @@ func (d *Database) MarkTipSetEconomicsComplete(ctx context.Context, tipset strin
 	return nil
 }
 
-func (d *Database) Persist(ctx context.Context, p model.PersistableWithTx) error {
-	stop := metrics.Timer(ctx, metrics.PersistDuration)
-	defer stop()
+func (d *Database) RunInTransaction(ctx context.Context, fn func(tx *pg.Tx) error) error {
+	return d.DB.RunInTransaction(ctx, fn)
+}
 
+// PersistBatch persists a batch of models in a single transaction
+func (d *Database) PersistBatch(ctx context.Context, ps ...model.Persistable) error {
 	return d.DB.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return p.PersistWithTx(ctx, tx)
+		txs := &TxStorage{
+			tx:     tx,
+			upsert: d.Upsert,
+		}
+
+		for _, p := range ps {
+			if err := p.Persist(ctx, txs); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
+}
+
+type TxStorage struct {
+	tx     *pg.Tx
+	upsert bool
+}
+
+// PersistModel persists a single model
+func (s *TxStorage) PersistModel(ctx context.Context, m interface{}) error {
+	value := reflect.ValueOf(m)
+
+	elemKind := value.Kind()
+	if value.Kind() == reflect.Ptr {
+		elemKind = value.Elem().Kind()
+	}
+
+	if elemKind == reflect.Slice || elemKind == reflect.Array {
+		// Avoid persisting zero length lists
+		if value.Len() == 0 {
+			return nil
+		}
+
+		// go-pg expects pointers to slices. We can fix it up.
+		if value.Kind() != reflect.Ptr {
+			p := reflect.New(value.Type())
+			p.Elem().Set(value)
+			m = p.Interface()
+		}
+
+	}
+	if s.upsert {
+		conflict, upsert := GenerateUpsertStrings(m)
+		if _, err := s.tx.ModelContext(ctx, m).
+			OnConflict(conflict).
+			Set(upsert).
+			Insert(); err != nil {
+			return xerrors.Errorf("upserting model: %w", err)
+		}
+	} else {
+		if _, err := s.tx.ModelContext(ctx, m).
+			OnConflict("do nothing").
+			Insert(); err != nil {
+			return xerrors.Errorf("persisting model: %w", err)
+		}
+	}
+	return nil
+}
+
+// GenerateUpsertString accepts a visor model and returns two string containing SQL that may be used
+// to upsert the model. The first string is the conflict statement and the second is the insert.
+//
+// Example given the below model:
+//
+// type SomeModel struct {
+// 	Height    int64  `pg:",pk,notnull,use_zero"`
+// 	MinerID   string `pg:",pk,notnull"`
+// 	StateRoot string `pg:",pk,notnull"`
+// 	OwnerID  string `pg:",notnull"`
+// 	WorkerID string `pg:",notnull"`
+// }
+//
+// The strings returned are:
+// conflict string:
+//	"(cid, height, state_root) DO UPDATE"
+// update string:
+// 	"owner_id" = EXCLUDED.owner_id, "worker_id" = EXCLUDED.worker_id
+func GenerateUpsertStrings(model interface{}) (string, string) {
+	var cf []string
+	var ucf []string
+
+	// gather all public keys
+	for _, pk := range pg.Model(model).TableModel().Table().PKs {
+		cf = append(cf, pk.SQLName)
+	}
+	// gather all other fields
+	for _, field := range pg.Model(model).TableModel().Table().DataFields {
+		ucf = append(ucf, field.SQLName)
+	}
+
+	// consistent ordering in sql statements.
+	sort.Strings(cf)
+	sort.Strings(ucf)
+
+	// build the conflict string
+	var conflict strings.Builder
+	conflict.WriteString("(")
+	for i, str := range cf {
+		conflict.WriteString(str)
+		// if this isn't the last field in the conflict statement add a comma.
+		if !(i == len(cf)-1) {
+			conflict.WriteString(", ")
+		}
+	}
+	conflict.WriteString(") DO UPDATE")
+
+	// build the upsert string
+	var upsert strings.Builder
+	for i, str := range ucf {
+		upsert.WriteString("\"" + str + "\"" + " = EXCLUDED." + str)
+		// if this isn't the last field in the upsert statement add a comma.
+		if !(i == len(ucf)-1) {
+			upsert.WriteString(", ")
+		}
+	}
+	return conflict.String(), upsert.String()
 }

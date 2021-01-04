@@ -46,8 +46,10 @@ dockerdown:
 
 # testfull runs all tests
 .PHONY: testfull
-testfull:
+testfull: build
 	docker-compose up -d
+	sleep 2
+	./visor migrate --latest
 	TZ= PGSSLMODE=disable go test ./... -v || echo ""
 	docker-compose down
 
@@ -85,3 +87,8 @@ dist-clean:
 .PHONY: changelog
 changelog:
 	go run github.com/git-chglog/git-chglog/cmd/git-chglog -o CHANGELOG.md
+
+test-coverage:
+	VISOR_TEST_DB="postgres://postgres:password@localhost:5432/postgres?sslmode=disable" go test -coverprofile=coverage.out ./...
+.PHONY: test-coverage
+

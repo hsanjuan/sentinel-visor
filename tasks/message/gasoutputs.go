@@ -2,10 +2,15 @@ package message
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
-	"github.com/go-pg/pg/v10"
+	"github.com/filecoin-project/lotus/chain/state"
+	"github.com/filecoin-project/lotus/chain/types"
+	"github.com/ipfs/go-cid"
 	"github.com/raulk/clock"
 	"go.opencensus.io/tag"
 	"go.opentelemetry.io/otel/api/global"
@@ -15,6 +20,7 @@ import (
 	"github.com/filecoin-project/sentinel-visor/metrics"
 	"github.com/filecoin-project/sentinel-visor/model/derived"
 	"github.com/filecoin-project/sentinel-visor/storage"
+	"github.com/filecoin-project/sentinel-visor/tasks/actorstate"
 	"github.com/filecoin-project/sentinel-visor/wait"
 )
 
@@ -65,7 +71,7 @@ func (p *GasOutputsProcessor) processBatch(ctx context.Context, node lens.API) (
 
 	claimUntil := p.clock.Now().Add(p.leaseLength)
 
-	var batch []*derived.ProcessingGasOutputs
+	var batch []*derived.GasOutputs
 	var err error
 
 	if p.useLeases {
@@ -104,7 +110,7 @@ func (p *GasOutputsProcessor) processBatch(ctx context.Context, node lens.API) (
 
 		errorLog := log.With("cid", item.Cid)
 
-		if err := p.processItem(ctx, node, &item.GasOutputs); err != nil {
+		if err := p.processItem(ctx, node, item); err != nil {
 			// Any errors are likely to be problems using the lens, mark this tipset as failed and exit this batch
 			errorLog.Errorw("failed to process message", "error", err.Error())
 			if err := p.storage.MarkGasOutputsMessagesComplete(ctx, item.Height, item.Cid, p.clock.Now(), err.Error()); err != nil {
@@ -125,6 +131,35 @@ func (p *GasOutputsProcessor) processItem(ctx context.Context, node lens.API, it
 	stop := metrics.Timer(ctx, metrics.ProcessingDuration)
 	defer stop()
 
+	// Note: this item will only be processed if there are receipts for
+	// it, which means there should be a tipset at height+1.  This is only
+	// used to get the destination actor code, so we don't care about side
+	// chains.
+	child, err := node.ChainGetTipSetByHeight(ctx, abi.ChainEpoch(item.Height+1), types.NewTipSetKey())
+	if err != nil {
+		return xerrors.Errorf("Failed to load child tipset: %w", err)
+	}
+
+	st, err := state.LoadStateTree(node.Store(), child.ParentState())
+	if err != nil {
+		return xerrors.Errorf("load state tree when gas outputs for %s: %w", item.Cid, err)
+	}
+
+	dstAddr, err := address.NewFromString(item.To)
+	if err != nil {
+		return xerrors.Errorf("parse to address failed for gas outputs in %s: %w", item.Cid, err)
+	}
+
+	var dstActorCode cid.Cid
+	dstActor, err := st.GetActor(dstAddr)
+	if err != nil {
+		if !errors.Is(err, types.ErrActorNotFound) {
+			return xerrors.Errorf("get destination actor for gas outputs %s failed: %w", item.Cid, err)
+		}
+	} else {
+		dstActorCode = dstActor.Code
+	}
+
 	baseFee, err := big.FromString(item.ParentBaseFee)
 	if err != nil {
 		return xerrors.Errorf("parse fee cap: %w", err)
@@ -144,6 +179,7 @@ func (p *GasOutputsProcessor) processItem(ctx context.Context, node lens.API, it
 	outputs := node.ComputeGasOutputs(item.GasUsed, item.GasLimit, baseFee, feeCap, gasPremium)
 	cgoStop()
 
+	item.ActorName = actorstate.ActorNameByCode(dstActorCode)
 	item.BaseFeeBurn = outputs.BaseFeeBurn.String()
 	item.OverEstimationBurn = outputs.OverEstimationBurn.String()
 	item.MinerPenalty = outputs.MinerPenalty.String()
@@ -152,9 +188,7 @@ func (p *GasOutputsProcessor) processItem(ctx context.Context, node lens.API, it
 	item.GasRefund = outputs.GasRefund
 	item.GasBurned = outputs.GasBurned
 
-	if err := p.storage.DB.RunInTransaction(ctx, func(tx *pg.Tx) error {
-		return item.PersistWithTx(ctx, tx)
-	}); err != nil {
+	if err := p.storage.PersistBatch(ctx, item); err != nil {
 		return xerrors.Errorf("persisting gas outputs: %w", err)
 	}
 
